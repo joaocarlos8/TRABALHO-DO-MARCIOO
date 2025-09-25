@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Fantasminha Inteligente</title>
+  <style>
+    body {
+      background: #111;
+      color: #eee;
+      font-family: monospace;
+      text-align: center;
+      padding: 20px;
+    }
+    #jogo {
+      border: 2px solid #fff;
+      display: block;
+      margin: 0 auto;
+    }
+    .botoes {
+      margin-top: 12px;
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+    }
+    button {
+      padding: 10px 18px;
+      font-size: 16px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      background: #444;
+      color: #fff;
+      transition: background 0.2s;
+    }
+    button:hover {
+      background: #666;
+    }
+  </style>
+</head>
+<body>
+  <h1>Fantasminha Inteligente</h1>
+  <canvas id="jogo"></canvas>
+
+  <div class="botoes">
+    <button onclick="proximoLabirinto()">Próximo Labirinto</button>
+    <button onclick="reiniciarLabirinto()">Reiniciar Labirinto</button>
+  </div>
+
+  <script src="jogo.js"></script>
+</body>
+</html>

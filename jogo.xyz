@@ -1,0 +1,279 @@
+// jogo.js - Fantasminha Inteligente com métricas, botões, continuação e suporte ao F no CSV
+const canvas = document.getElementById('jogo');
+const ctx = canvas.getContext('2d');
+
+let mapaAtual = 1;
+let destinoAlcancado = false;
+let loopId = null;
+
+/* ==== CONFIGURAÇÃO ==== */
+const TOTAL_LABIRINTOS = 4;   // temos 4 labirintos
+const TAM = 24;
+const COR_PAREDE = '#333333';
+const COR_SAIDA = '#FFD700';
+const COR_VISIT = '#33A3FF';
+const COR_RASTRO = '#00FF66';
+
+/* ==== Estado do jogo ==== */
+let mapa = [];
+let L = 0, C = 0;
+let raioX = [];
+let visitas = [];
+let saidas = [];
+let caminho = [];
+
+const DIRS = [
+  { nome: 'direita', dx: 1, dy: 0 },
+  { nome: 'esquerda', dx: -1, dy: 0 },
+  { nome: 'cima', dx: 0, dy: -1 },
+  { nome: 'baixo', dx: 0, dy: 1 }
+];
+
+const fantasma = { l: 1, c: 1, dir: null, imgs: {} };
+['direita', 'esquerda', 'cima', 'baixo'].forEach(d => {
+  const img = new Image();
+  img.src = `assets/fantasma_${d}.png`;
+  fantasma.imgs[d] = img;
+});
+
+/* ==== Métricas ==== */
+let passosPorLab = Array(TOTAL_LABIRINTOS+1).fill(0);
+let tempoPorLab = Array(TOTAL_LABIRINTOS+1).fill(0);
+
+let stepCount = 0;        // passos no labirinto corrente
+let startTime = null;     // ms início do labirinto atual
+
+/* ==== Utilidades ==== */
+function dentro(l, c) { return l >= 0 && l < L && c >= 0 && c < C; }
+function livreOuSaida(l, c) { 
+  return dentro(l, c) && (mapa[l][c] === '0' || mapa[l][c] === 'X' || mapa[l][c] === 'F'); 
+}
+function formatTime(ms) {
+  if (ms == null) return "00:00";
+  const s = Math.floor(ms / 1000);
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+}
+
+/* ==== Carregar mapa ==== */
+function carregarMapa(nome = `labirinto${mapaAtual}.csv`, manterPos = false) {
+  fetch(nome).then(r => {
+    if (!r.ok) throw new Error(`Falha ao carregar ${nome}`);
+    return r.text();
+  }).then(txt => {
+    mapa = txt.trim().split(/\r?\n/).map(l => l.trim().split(','));
+    L = mapa.length; C = mapa[0].length;
+
+    canvas.width = C * TAM;
+    canvas.height = L * TAM * 2;
+
+    raioX = Array.from({ length: L }, () => Array(C).fill(0));
+    visitas = Array.from({ length: L }, () => Array(C).fill(0));
+    saidas = [];
+    caminho = [];
+    destinoAlcancado = false;
+    caminhoPlanejado = [];
+
+    // reset métricas do lab atual
+    stepCount = 0;
+    startTime = Date.now();
+
+    let startL = 1, startC = 1;
+    for (let l = 0; l < L; l++) {
+      for (let c = 0; c < C; c++) {
+        if (mapa[l][c] === 'X') saidas.push({ l, c });
+        if (mapa[l][c] === 'F') {
+          startL = l;
+          startC = c;
+          mapa[l][c] = '0'; // substitui F por 0 para não atrapalhar
+        }
+      }
+    }
+
+    if (!manterPos) {
+      fantasma.l = startL;
+      fantasma.c = startC;
+    }
+
+    fantasma.dir = null;
+
+    raioX[fantasma.l][fantasma.c] = 1;
+    visitas[fantasma.l][fantasma.c] = 1;
+    caminho.push({ l: fantasma.l, c: fantasma.c });
+
+    desenhar();
+  }).catch(err => {
+    clearInterval(loopId);
+    alert("Erro ao carregar labirinto: " + err.message);
+  });
+}
+
+/* ==== Inteligência do Fantasma (BFS) ==== */
+let caminhoPlanejado = [];
+function escolherDirecaoInteligente() {
+  if (caminhoPlanejado.length > 0) {
+    const prox = caminhoPlanejado.shift();
+    const dx = prox.c - fantasma.c;
+    const dy = prox.l - fantasma.l;
+    if (dx === 1) return DIRS[0];
+    if (dx === -1) return DIRS[1];
+    if (dy === -1) return DIRS[2];
+    if (dy === 1) return DIRS[3];
+  }
+  caminhoPlanejado = calcularCaminhoMaisCurto(fantasma.l, fantasma.c);
+  return escolherDirecaoInteligente();
+}
+function calcularCaminhoMaisCurto(sl, sc) {
+  const fila = [{ l: sl, c: sc, pai: null }];
+  const visit = Array.from({ length: L }, () => Array(C).fill(false));
+  visit[sl][sc] = true;
+  while (fila.length > 0) {
+    const atual = fila.shift();
+    if (mapa[atual.l][atual.c] === 'X') {
+      let caminho = [];
+      let node = atual;
+      while (node) { caminho.unshift({ l: node.l, c: node.c }); node = node.pai; }
+      caminho.shift(); // remover posição atual
+      return caminho;
+    }
+    for (const d of DIRS) {
+      const nl = atual.l + d.dy;
+      const nc = atual.c + d.dx;
+      if (livreOuSaida(nl, nc) && !visit[nl][nc]) {
+        visit[nl][nc] = true;
+        fila.push({ l: nl, c: nc, pai: atual });
+      }
+    }
+  }
+  return [];
+}
+
+/* ==== Movimento ==== */
+function passo() {
+  if (destinoAlcancado) return;
+
+  const novaDir = escolherDirecaoInteligente();
+
+  // checar se já está na saída
+  if (mapa[fantasma.l][fantasma.c] === 'X' && !destinoAlcancado) {
+    destinoAlcancado = true;
+    const elapsed = Date.now() - startTime;
+    passosPorLab[mapaAtual] = stepCount;
+    tempoPorLab[mapaAtual] = elapsed;
+
+    setTimeout(() => {
+      if (mapaAtual < TOTAL_LABIRINTOS) {
+        mapaAtual++;
+        destinoAlcancado = false;
+        carregarMapa(`labirinto${mapaAtual}.csv`);
+      } else {
+        mostrarRelatorioFinal();
+        clearInterval(loopId);
+      }
+    }, 700);
+    return;
+  }
+
+  if (novaDir) fantasma.dir = novaDir;
+  if (!fantasma.dir) return;
+
+  const nl = fantasma.l + fantasma.dir.dy;
+  const nc = fantasma.c + fantasma.dir.dx;
+  if (livreOuSaida(nl, nc)) {
+    fantasma.l = nl; fantasma.c = nc;
+    raioX[nl][nc] = 1;
+    visitas[nl][nc]++;
+    caminho.push({ l: nl, c: nc });
+    stepCount++;
+  }
+  desenhar();
+}
+
+/* ==== Relatório final ==== */
+function mostrarRelatorioFinal() {
+  let texto = "Relatório Final — Fantasminha Inteligente\n\n";
+  let somaPassos = 0, somaTempo = 0;
+  for (let i = 1; i <= TOTAL_LABIRINTOS; i++) {
+    const p = passosPorLab[i] || 0;
+    const t = tempoPorLab[i] || 0;
+    somaPassos += p;
+    somaTempo += t;
+    texto += `Labirinto ${i}: Passos = ${p}, Tempo = ${formatTime(t)}\n`;
+  }
+  texto += `\nTOTAL — Passos: ${somaPassos}, Tempo: ${formatTime(somaTempo)}`;
+  alert(texto);
+}
+
+/* ==== Botões ==== */
+function proximoLabirinto() {
+  const elapsed = Date.now() - startTime;
+  passosPorLab[mapaAtual] = stepCount;
+  tempoPorLab[mapaAtual] = elapsed;
+
+  if (mapaAtual < TOTAL_LABIRINTOS) {
+    mapaAtual++;
+    carregarMapa(`labirinto${mapaAtual}.csv`, true); // mantém posição do fantasma
+  } else {
+    mostrarRelatorioFinal();
+    clearInterval(loopId);
+  }
+}
+
+function reiniciarLabirinto() {
+  carregarMapa(`labirinto${mapaAtual}.csv`);
+}
+
+/* ==== Desenho ==== */
+function desenhar() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let l = 0; l < L; l++) {
+    for (let c = 0; c < C; c++) {
+      if (mapa[l][c] === '1') { ctx.fillStyle = COR_PAREDE; }
+      else if (mapa[l][c] === 'X') { ctx.fillStyle = COR_SAIDA; }
+      else { continue; }
+      ctx.fillRect(c * TAM, l * TAM, TAM, TAM);
+    }
+  }
+
+  if (fantasma.dir) {
+    const img = fantasma.imgs[fantasma.dir.nome];
+    if (img.complete) ctx.drawImage(img, fantasma.c * TAM, fantasma.l * TAM, TAM, TAM);
+  }
+
+  const offY = L * TAM;
+  for (let l = 0; l < L; l++) {
+    for (let c = 0; c < C; c++) {
+      let cel = mapa[l][c];
+      if (cel === '1') ctx.fillStyle = '#666';
+      else if (cel === 'X') ctx.fillStyle = COR_SAIDA;
+      else ctx.fillStyle = raioX[l][c] ? COR_VISIT : '#000';
+      ctx.fillRect(c * TAM, l * TAM + offY, TAM, TAM);
+    }
+  }
+
+  if (caminho.length > 1) {
+    ctx.strokeStyle = COR_RASTRO;
+    ctx.beginPath();
+    for (let i = 0; i < caminho.length; i++) {
+      const x = caminho[i].c * TAM + TAM / 2;
+      const y = caminho[i].l * TAM + TAM / 2 + offY;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // HUD - informações
+  ctx.fillStyle = '#fff';
+  ctx.font = '16px monospace';
+  ctx.fillText(`Labirinto ${mapaAtual}/${TOTAL_LABIRINTOS}`, 8, 20);
+  ctx.fillText(`Passos (lab): ${stepCount}`, 8, 40);
+  const tempoAtual = startTime ? (Date.now() - startTime) : 0;
+  ctx.fillText(`Tempo (lab): ${formatTime(tempoAtual)}`, 8, 60);
+}
+
+/* ==== Loop ==== */
+carregarMapa();
+loopId = setInterval(passo, 120);
